@@ -1,4 +1,10 @@
-use std::collections::HashSet;
+mod dictionary;
+
+use std::process::exit;
+
+use dictionary::Dictionary;
+
+const ATTEMPT_RENDER_FREQ: usize = 5;
 
 ///*
 /// This tool generates word magic squares, which are NxM matrices of letters
@@ -7,104 +13,6 @@ use std::collections::HashSet;
 /// The user can pass in a custom dictionary file, or the default OS dict will
 /// be used.
 /// */
-
-/// A simple Dictionary implementation, with `contains` and `len` methods.
-/// Clonable, so it can be passed around.
-#[derive(Clone)]
-struct Dictionary {
-    words: HashSet<String>,
-}
-
-const ATTEMPT_RENDER_FREQ: usize = 5;
-
-impl Dictionary {
-    fn contains(&self, word: &str) -> bool {
-        self.words.contains(word)
-    }
-
-    /// Return all the words that match a template. A template is a set of
-    /// letters or a wildcard (_). For example, "__mon" will match "demon" and
-    /// "lemon", but not "human".
-    fn search_with_template(&self, template: &str) -> Vec<String> {
-        let tmp = template.to_lowercase();
-        self.words
-            .iter()
-            .filter(|word| {
-                // Short-circuit on length:
-                if word.len() != tmp.len() {
-                    return false;
-                }
-                let mut chars = word.chars();
-                for c in tmp.chars() {
-                    if c == '_' {
-                        chars.next();
-                    } else {
-                        if chars.next() != Some(c) {
-                            return false;
-                        }
-                    }
-                }
-                true
-            })
-            .map(|s| s.to_string())
-            .collect()
-    }
-
-    fn count_with_template(&self, template: &str) -> usize {
-        self.search_with_template(template).len()
-    }
-
-    /// Create a new dictionary from a file.
-    /// The file should contain one word per line.
-    /// The words should be lowercase.
-    ///
-    /// # Arguments
-    /// * `path` - The path to the dictionary file.
-    ///
-    /// # Returns
-    /// * Ok(A new dictionary)
-    /// * Err(String) if the file could not be read.
-    fn from_file(path: &str) -> Result<Dictionary, String> {
-        use std::fs::File;
-        use std::io::{BufRead, BufReader};
-
-        let file = File::open(path).map_err(|e| e.to_string())?;
-        let reader = BufReader::new(file);
-
-        let mut words = HashSet::new();
-        for line in reader.lines() {
-            words.insert(line.map_err(|e| e.to_string())?);
-        }
-
-        Ok(Dictionary { words })
-    }
-
-    /// Create a new dictionary from the OS dictionary.
-    ///
-    /// # Returns
-    /// * Ok(A new dictionary)
-    /// * Err(String) if the OS dictionary could not be read.
-    fn from_os_dict() -> Result<Dictionary, String> {
-        use std::process::Command;
-
-        let output = Command::new("cat")
-            .arg("/usr/share/dict/words")
-            .output()
-            .map_err(|e| e.to_string())?;
-
-        if !output.status.success() {
-            return Err("Could not read OS dictionary".to_string());
-        }
-
-        let words = String::from_utf8(output.stdout).map_err(|e| e.to_string())?;
-        let words = words
-            .lines()
-            .map(|s| s.to_lowercase())
-            .collect::<HashSet<String>>();
-
-        Ok(Dictionary { words })
-    }
-}
 
 /// Check if a word is a valid dictionary word.
 ///
@@ -130,6 +38,7 @@ fn is_valid_word(word: &str, dict: &Dictionary) -> bool {
 /// The `empty` method will create an empty square.
 struct MagicSquare {
     square: Vec<Vec<char>>,
+    editable_mask: Vec<Vec<bool>>,
     dict: Dictionary,
     _attempt: usize,
 }
@@ -149,6 +58,7 @@ impl MagicSquare {
     fn empty(rows: usize, cols: usize, dict: &Dictionary) -> MagicSquare {
         MagicSquare {
             square: vec![vec!['_'; cols]; rows],
+            editable_mask: vec![vec![true; cols]; rows],
             dict: dict.clone(),
             _attempt: 0,
         }
@@ -156,6 +66,12 @@ impl MagicSquare {
 
     fn set(&mut self, row: usize, col: usize, c: char) {
         self.square[row][col] = c;
+    }
+    fn set_and_harden(&mut self, row: usize, col: usize, c: char) {
+        self.square[row][col] = c;
+        if c != '_' {
+            self.editable_mask[row][col] = false;
+        }
     }
 
     fn get(&self, row: usize, col: usize) -> char {
@@ -184,7 +100,7 @@ impl MagicSquare {
     fn find_first_empty_square(&self) -> Option<(usize, usize)> {
         for (row, row_vec) in self.square.iter().enumerate() {
             for (col, c) in row_vec.iter().enumerate() {
-                if *c == '_' {
+                if *c == '_' && self.editable_mask[row][col] {
                     return Some((row, col));
                 }
             }
@@ -211,19 +127,34 @@ impl MagicSquare {
             return self.fill_helper(row + 1, 0);
         }
 
-        // Try every letter in the alphabet
+        // If this is a masked cell, move on to the next one:
+        if !self.editable_mask[row][col] {
+            // let (nrow, ncol) = self.find_first_empty_square().unwrap();
+            // return self.fill_helper(nrow, ncol);
+            return Ok(());
+        }
+
+        // Try every letter in the alphabet.
+        // TODO: Randomized order??
         for c in 'a'..='z' {
-            // self._attempt += 1;
+            self._attempt += 1;
             // If the letter is valid, set it and try to fill the rest of the square
             if self.is_valid_letter(row, col, c) {
                 // Only draw every Nth attempt
-                // if self._attempt++ % ATTEMPT_RENDER_FREQ == 0 {
-                self.clear_and_print();
-                // }
+                if self._attempt % ATTEMPT_RENDER_FREQ == 0 {
+                    self.clear_and_print();
+                }
                 self.set(row, col, c);
-                if let Ok(()) = self.fill_helper(row, col + 1) {
+                if self.find_first_empty_square().is_none() {
                     return Ok(());
                 }
+                let (nrow, ncol) = self.find_first_empty_square().unwrap();
+                if let Ok(()) = self.fill_helper(nrow, ncol) {
+                    return Ok(());
+                }
+                // if let Ok(()) = self.fill_helper(row, col + 1) {
+                //     return Ok(());
+                // }
             }
         }
 
@@ -318,17 +249,28 @@ fn main() {
 
     // If called with a string word, use that as the first word (comes before
     // the dict path)
-    let first_word = if let Some(word) = std::env::args().nth(2) {
+    let fixed_chars = if let Some(word) = std::env::args().nth(2) {
         word
     } else {
         "_____".to_string()
     };
 
+    // If called with an integer as 3rd argument, use that as the number of
+    // rows in the puzzle:
+    let row_count = if let Some(rows) = std::env::args().nth(3) {
+        rows.parse::<usize>().unwrap()
+    } else {
+        4
+    };
+
+    let fixed_char_words: Vec<&str> = fixed_chars.split("/").collect();
+
     // Create a dictionary from the default OS dictionary
     // let dict = Dictionary::from_os_dict().unwrap();
+    let column_count = fixed_char_words[0].len();
 
     // Create a 4x4 magic square
-    let mut square = MagicSquare::empty(4, first_word.len(), &dict);
+    let mut square = MagicSquare::empty(row_count, column_count, &dict);
 
     // Set the first row:
     // square.set(0, 0, 'j');
@@ -337,14 +279,42 @@ fn main() {
     // square.set(0, 3, 'n');
     // square.set(0, 4, 't');
 
-    let w1 = first_word.chars().collect::<Vec<char>>();
-    for (i, &c) in w1.iter().enumerate() {
-        square.set(0, i, c);
+    // let w1 = first_word.chars().collect::<Vec<char>>();
+    // for (i, &c) in w1.iter().enumerate() {
+    //     square.set_and_harden(0, i, c);
+    // }
+    for (i, &c) in fixed_chars
+        .chars()
+        .collect::<Vec<char>>()
+        .iter()
+        .filter(|x| **x != '/')
+        .enumerate()
+    {
+        let row = i / column_count;
+        let col = i % column_count;
+        square.set_and_harden(row, col, c);
     }
-    square.fill().unwrap();
+    let fillres = square.fill();
+    if fillres.is_err() {
+        println!("Could not fill square.");
+        exit(1);
+    }
 
     // Print the square
-    print!("Magic square:\n");
+    print!("{}[2J", 27 as char);
+
+    for row in 0..square.square.len() {
+        let rowv = square.get_row(row);
+        let rowstr: Vec<String> = rowv.iter().map(|f| f.to_string()).collect();
+        println!("{}", rowstr.join(""));
+    }
+    for col in 0..square.square[0].len() {
+        let colv = square.get_col(col);
+        let colstr: Vec<String> = colv.iter().map(|f| f.to_string()).collect();
+        println!("{}", colstr.join(""));
+    }
+    println!("");
+
     square.print();
 
     // Print the capitalized letters all concatenated
