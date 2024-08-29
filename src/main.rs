@@ -209,12 +209,7 @@ impl MagicSquare {
     fn is_valid_word_or_template(&self, word: &Vec<char>) -> bool {
         let word_as_str = word.iter().collect::<String>();
         // Check if the word is a valid dictionary word
-        if self.dict.contains(word_as_str.as_str()) {
-            return true;
-        }
-
-        // Check if the word has nonzero template matches
-        if self.dict.count_with_template(word_as_str.as_str()) > 0 {
+        if self.dict.contains(word_as_str.as_str()) || self.dict.count_with_template(word_as_str.as_str()) > 0 {
             return true;
         }
 
