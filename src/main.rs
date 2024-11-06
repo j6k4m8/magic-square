@@ -4,30 +4,7 @@ use std::process::exit;
 
 use dictionary::Dictionary;
 
-const ATTEMPT_RENDER_FREQ: usize = 5;
-
-///*
-/// This tool generates word magic squares, which are NxM matrices of letters
-/// arranged such that every row and every column is a valid dictionary word.
-///
-/// The user can pass in a custom dictionary file, or the default OS dict will
-/// be used.
-/// */
-
-/// Check if a word is a valid dictionary word.
-///
-/// # Arguments
-///
-/// * `word` - The word to check.
-/// * `dict` - The dictionary to check against.
-///
-/// # Returns
-///
-/// * `true` if the word is valid, `false` otherwise.
-fn is_valid_word(word: &str, dict: &Dictionary) -> bool {
-    // All letters are alphanumeric, longer than 2 chars, and in the dictionary
-    word.len() > 2 && word.chars().all(|c| c.is_alphanumeric()) && dict.contains(word)
-}
+const ATTEMPT_RENDER_FREQ: usize = 10;
 
 /// A magic square is a NxM matrix of letters arranged such that every row and
 /// every column is a valid dictionary word.
@@ -84,7 +61,7 @@ impl MagicSquare {
     ///
     /// * `Ok(())` if the square was filled successfully.
     /// * `Err(String)` if the square could not be filled.
-    fn fill(&mut self) -> Result<(), String> {
+    fn fill(&mut self, sator_mode: bool) -> Result<(), String> {
         // Starting at the top left, fill the square with letters such that
         // every row and column is a valid dictionary word. This is done by
         // recursively filling the square with letters, and backtracking if
@@ -94,7 +71,7 @@ impl MagicSquare {
         let (row, col) = self.find_first_empty_square().unwrap();
 
         // Fill the square with letters
-        self.fill_helper(row, col)
+        self.fill_helper(row, col, sator_mode)
     }
 
     fn find_first_empty_square(&self) -> Option<(usize, usize)> {
@@ -116,7 +93,7 @@ impl MagicSquare {
     /// If all letters have been tried and none of them work, return an error.
     /// If the square is filled successfully, return `Ok(())`.
     /// This function is recursive.
-    fn fill_helper(&mut self, row: usize, col: usize) -> Result<(), String> {
+    fn fill_helper(&mut self, row: usize, col: usize, sator_mode: bool) -> Result<(), String> {
         // If we've reached the end of the square, we're done
         if row == self.square.len() {
             return Ok(());
@@ -124,7 +101,7 @@ impl MagicSquare {
 
         // If we've reached the end of the row, move to the next row
         if col == self.square[row].len() {
-            return self.fill_helper(row + 1, 0);
+            return self.fill_helper(row + 1, 0, sator_mode);
         }
 
         // If this is a masked cell, move on to the next one:
@@ -145,11 +122,18 @@ impl MagicSquare {
                     self.clear_and_print();
                 }
                 self.set(row, col, c);
+                // If we're in sator mode, set the corresponding letter from
+                // the end of the square:
+                if sator_mode {
+                    let end_row = self.square.len() - row - 1;
+                    let end_col = self.square[row].len() - col - 1;
+                    self.set(end_row, end_col, c);
+                }
                 if self.find_first_empty_square().is_none() {
                     return Ok(());
                 }
                 let (nrow, ncol) = self.find_first_empty_square().unwrap();
-                if let Ok(()) = self.fill_helper(nrow, ncol) {
+                if let Ok(()) = self.fill_helper(nrow, ncol, sator_mode) {
                     return Ok(());
                 }
                 // if let Ok(()) = self.fill_helper(row, col + 1) {
@@ -160,6 +144,11 @@ impl MagicSquare {
 
         // If we've tried every letter and none of them work, backtrack
         self.set(row, col, '_');
+        if sator_mode {
+            let end_row = self.square.len() - row - 1;
+            let end_col = self.square[row].len() - col - 1;
+            self.set(end_row, end_col, '_');
+        }
         Err(format!("Could not fill square at ({}, {})", row, col))
     }
 
@@ -209,7 +198,9 @@ impl MagicSquare {
     fn is_valid_word_or_template(&self, word: &Vec<char>) -> bool {
         let word_as_str = word.iter().collect::<String>();
         // Check if the word is a valid dictionary word
-        if self.dict.contains(word_as_str.as_str()) || self.dict.count_with_template(word_as_str.as_str()) > 0 {
+        if self.dict.contains(word_as_str.as_str())
+            || self.dict.count_with_template(word_as_str.as_str()) > 0
+        {
             return true;
         }
 
@@ -258,6 +249,15 @@ fn main() {
         4
     };
 
+    // If called with a fourth argument reading "SATOR", then run
+    // "sator_mode=true" where the entire puzzle is a palindrome.
+    let sator_mode = if let Some(sator) = std::env::args().nth(4) {
+        sator == "SATOR"
+    } else {
+        false
+    };
+    println!("Sator mode: {}", sator_mode);
+
     let fixed_char_words: Vec<&str> = fixed_chars.split("/").collect();
 
     // Create a dictionary from the default OS dictionary
@@ -289,7 +289,7 @@ fn main() {
         let col = i % column_count;
         square.set_and_harden(row, col, c);
     }
-    let fillres = square.fill();
+    let fillres = square.fill(sator_mode);
     if fillres.is_err() {
         println!("Could not fill square.");
         exit(1);
